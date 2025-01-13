@@ -5,10 +5,10 @@ date: "2024-12-04"
 ---
 
 ```{r packages}
-install.packages("readxl")
-install.packages("tidyverse")
-install.packages("plotly")
-install.packages("rmarkdown")
+# install.packages("readxl")
+# install.packages("tidyverse")
+# install.packages("plotly")
+# install.packages("rmarkdown")
 
 
 library(readxl)
