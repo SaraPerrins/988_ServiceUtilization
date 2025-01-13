@@ -1,0 +1,191 @@
+---
+title: "988_prelim"
+output: html_document
+date: "2024-12-04"
+---
+
+```{r packages}
+install.packages("readxl")
+install.packages("tidyverse")
+install.packages("plotly")
+install.packages("rmarkdown")
+
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(plotly)
+library(rmarkdown)
+```
+
+```{r read data}
+
+# Replace 'your_file.xlsx' with the path to your file
+file_path <- "~/Downloads/DownloadTable_StatePayerED_8-29-24.xlsx"
+
+# Read the "data" sheet
+data <- read_excel(file_path, sheet = "Data")
+
+# Count the number of cells in the dataframe that contain exactly 0. 
+zero_count <- sum(data == 0, na.rm = TRUE)
+
+# Print the result
+print(paste("Number of cells with just 0:", zero_count))
+
+#Checking if any states have Age == "Adult and Pediatric" data but missing data for either Age == "Adult" or Age == "Pediatric": 
+# Filter relevant data
+age_data <- data %>%
+  filter(Age %in% c("Pediatric", "Adult", "Adult and Pediatric"))
+
+# Summarize presence of Age categories per State
+age_summary <- age_data %>%
+  group_by(State) %>%
+  summarize(
+    has_pediatric = any(Age == "Pediatric"),
+    has_adult = any(Age == "Adult"),
+    has_adult_and_pediatric = any(Age == "Adult and Pediatric"),
+    .groups = "drop"
+  )
+
+# Identify problematic states
+problem_states <- age_summary %>%
+  filter(
+    has_adult_and_pediatric & (!has_pediatric | !has_adult)
+  )
+
+# View problematic states
+print(problem_states) #Looks good, I can proceed with calculation below: 
+
+
+# Filter data based on the conditions
+filtered_data <- data %>%
+  filter(Age %in% c("Pediatric", "Adult"),
+         `Expected Payer` == "All expected payers^",
+         `Hospitalization Type` %in% c("ED Visits", "Mental Health/Substance Use ED Visits"))
+
+# Gather quarterly columns into long format for easier manipulation
+long_data <- filtered_data %>%
+  pivot_longer(cols = starts_with("20"),  # Match all columns starting with year
+               names_to = "Quarter",
+               values_to = "Count")
+
+# Extract year from quarter
+long_data <- long_data %>%
+  mutate(Year = sub(" Q[1-4]", "", Quarter))  # Remove quarter to keep the year
+
+# Summarize data by State, Year, and Hospitalization Type
+annual_data <- long_data %>%
+  group_by(State, Year, `Hospitalization Type`) %>%
+  summarize(
+    Total_Visits = if (all(is.na(Count))) NA else sum(Count, na.rm = TRUE),
+    .groups = "drop"
+  )
+# Pivot wider to create separate columns for each year and hospitalization type
+final_data <- annual_data %>%
+  pivot_wider(names_from = c(Year, `Hospitalization Type`),
+              values_from = Total_Visits,
+              names_glue = "Total {`Hospitalization Type`}_{Year}") 
+
+# Create a list of the columns for Mental Health/Substance Use Visits and ED Visits
+mental_health_cols <- grep("Mental Health/Substance Use ED Visits", names(final_data), value = TRUE)
+ed_visit_cols <- gsub("Mental Health/Substance Use ED Visits", "ED Visits", mental_health_cols)
+
+# Calculate the proportion of mental health/substance use visits for each year
+for (i in seq_along(mental_health_cols)) {
+  year <- sub("Total Mental Health/Substance Use ED Visits_", "", mental_health_cols[i])
+  ed_col <- paste0("Total ED Visits_", year)
+  mh_col <- mental_health_cols[i]
+  
+  final_data <- final_data %>%
+    mutate(!!paste0("Proportion_Mental_Health_", year) := 
+             get(mh_col) / get(ed_col))
+}
+
+
+```
+
+```{r Summarizing Yearly Proportion of MH ED utilization}
+# Extract columns starting with "Proportion_Mental_Health_" followed by year
+proportion_MH_cols <- grep("^Proportion_Mental_Health_", names(final_data), value = TRUE)
+
+# Reshape data into a long format
+proportion_MH_long_data <- final_data %>%
+  select(State, all_of(proportion_MH_cols)) %>%
+  pivot_longer(cols = -State, 
+               names_to = "Year", 
+               values_to = "Proportion") %>%
+  mutate(Year = as.numeric(gsub("Proportion_Mental_Health_", "", Year)))
+
+# Identify states for minimum and maximum values
+summary_stats <- proportion_MH_long_data %>%
+  group_by(Year) %>%
+  summarise(
+    Min = min(Proportion, na.rm = TRUE),
+    Max = max(Proportion, na.rm = TRUE),
+    Mean = mean(Proportion, na.rm = TRUE),
+    Min_State = State[which.min(Proportion)],
+    Max_State = State[which.max(Proportion)]
+  )
+
+# Add states to the long data for plotting
+plot_data <- summary_stats %>%
+  pivot_longer(
+    cols = c("Min", "Max", "Mean"),
+    names_to = "Statistic",
+    values_to = "Value"
+  ) %>%
+  mutate(
+    State = case_when(
+      Statistic == "Min" ~ Min_State,
+      Statistic == "Max" ~ Max_State,
+      TRUE ~ NA_character_
+    )
+  )
+# Filter out rows with NA values in the `Value` column
+filtered_plot_data <- plot_data %>%
+  filter(!is.na(Value))
+
+# Define breaks for the Year and Proportion axes
+p1.year_breaks <- seq(min(filtered_plot_data$Year), max(filtered_plot_data$Year), by = 1)
+p1.proportion_breaks <- pretty(filtered_plot_data$Value)
+
+# Create the plot using the filtered data
+p1 <- ggplot(filtered_plot_data, aes(x = Year, y = Value, color = Statistic, group = Statistic)) +
+  geom_line(size = 1) +
+  geom_point(aes(
+    text = paste0(
+      "Year: ", Year,
+      "<br>Statistic: ", Statistic,
+      "<br>Value: ", round(Value, 2),
+      ifelse(!is.na(State), paste0("<br>State: ", State), "")
+    )
+  )) +
+  scale_x_continuous(breaks = p1.year_breaks) +
+  scale_y_continuous(breaks = p1.proportion_breaks) +
+  labs(
+    title = "Proportion of Emergency Department Utilization for Mental Health/Substance Use Reasons Across N = 37 States",
+    x = "Year",
+    y = "Proportion",
+    color = "Statistic"
+  ) +
+  theme_minimal()
+
+# Convert to interactive plotly object
+p1.interactive_plot <- ggplotly(p1, tooltip = "text")
+
+# Show the interactive plot
+p1.interactive_plot
+```
+
+```{r }
+
+```
+
+
+
+```{r Plotting}
+
+```
+
+
+
