@@ -171,7 +171,16 @@ p1 <- ggplot(filtered_plot_data, aes(x = Year, y = Value, color = Statistic, gro
   theme_minimal()
 
 # Convert to interactive plotly object
-p1.interactive_plot <- ggplotly(p1, tooltip = "text")
+p1.interactive_plot <- ggplotly(p1, tooltip = "text", width = 1000, height = 600) %>%
+  layout(
+    title = list(
+      font = list(size = 15)  # Adjust title font size if needed
+    ),
+    xaxis = list(
+      tickangle = 45  # Tilt x-axis labels by 45 degrees
+    )
+  )
+
 
 # Show the interactive plot
 p1.interactive_plot
